@@ -1,0 +1,67 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+venv/
+.venv/
+env/
+.eggs/
+dist/
+build/
+
+# Node / Vite
+node_modules/
+dist/
+.vite/
+*.local
+
+# IDE / Claude
+.claude/
+.idea/
+.vscode/
+
+# Secrets (NEVER commit)
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+client_secret*.json
+credentials.json
+token.json
+service-account*.json
+
+# Generated / data
+logs/
+*.log
+*.sqlite3
+*.duckdb
+results/
+
+# Local cache directories
+.cdsapirc
+
+# Large docs (keep .md, drop binary docs)
+*.docx
+*.pdf
+
+# OS
+.DS_Store
+Thumbs.db
+
+# v4 SQLite persistence
+*.db
+*.db-wal
+*.db-shm
+
+# Satellite detections (SQLite + overlay PNGs) and frontend build output
+eo_data/
+frontend/dist/

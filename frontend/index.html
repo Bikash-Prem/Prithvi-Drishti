@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en" class="is-launching">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Prithvi Drishti — satellite change detection, flood forecasting and response planning on one map, with the evidence shown.">
+    <title>Prithvi Drishti — See the Earth change</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/src/landing/landing.css">
+    <noscript><style>
+        html.is-launching { overflow: auto; }
+        html.is-launching .site-nav, html.is-launching .hero-in { visibility: visible; }
+        .launch-hud, #space-canvas { display: none; }
+    </style></noscript>
+</head>
+<body>
+    <!-- One persistent WebGL scene: launch intro, then the scroll companion.
+         Space (stars, Earth) is only drawn inside the dark [data-space] cards;
+         the satellite is drawn everywhere and follows the page down. -->
+    <canvas id="space-canvas" aria-hidden="true"></canvas>
+    <div id="launch-flash" class="launch-flash" aria-hidden="true"></div>
+
+    <!-- Launch sequence HUD (removed once orbit is achieved) -->
+    <div id="launch-hud" class="launch-hud" role="status" aria-live="polite">
+        <div class="hud-top">
+            <div class="hud-block">
+                <span class="hud-label">Mission</span>
+                <span class="hud-value">PRITHVI DRISHTI-1</span>
+            </div>
+            <div class="hud-block">
+                <span class="hud-label">Altitude</span>
+                <span class="hud-value"><span id="hud-alt">0</span> km</span>
+            </div>
+            <div class="hud-block">
+                <span class="hud-label">Velocity</span>
+                <span class="hud-value"><span id="hud-vel">0.00</span> km/s</span>
+            </div>
+        </div>
+        <div class="hud-center">
+            <div id="hud-count" class="hud-count">3</div>
+            <div id="hud-stage" class="hud-stage">Ignition sequence start</div>
+            <div class="hud-track"><div id="hud-progress" class="hud-progress"></div></div>
+        </div>
+        <button id="launch-skip" class="launch-skip" type="button">Skip intro</button>
+    </div>
+
+    <!-- Navigation: a floating, segmented bar -->
+    <header id="site-nav" class="site-nav">
+        <a class="nav-seg nav-brand" href="#hero" aria-label="Prithvi Drishti home">
+            <img src="/favicon.svg" alt="" width="22" height="22">
+            <span>Prithvi Drishti</span>
+        </a>
+        <nav class="nav-seg nav-links" aria-label="Sections">
+            <a href="#analyses">Analyses</a>
+            <a href="#showcase">Results</a>
+            <a href="#agents">Agents</a>
+            <a href="#pipeline">Pipeline</a>
+            <a href="#live">Live status</a>
+        </nav>
+        <a class="nav-seg nav-cta" href="/dashboard.html">Open dashboard</a>
+    </header>
+
+    <!-- Orbit rail: scroll progress; the small satellite rides it down the page -->
+    <aside id="orbit-rail" class="orbit-rail" aria-hidden="true">
+        <div class="rail-line"><div id="rail-fill" class="rail-fill"></div></div>
+        <div id="rail-sat" class="rail-sat"><i></i></div>
+    </aside>
+
+    <main id="journey">
+        <!-- 1 · Hero -->
+        <section id="hero" class="scene scene-hero" data-scene="hero">
+            <div class="space-card" data-space aria-hidden="true"></div>
+            <div class="space-ring" aria-hidden="true"></div>
+            <div class="hero-copy">
+                <h1 class="hero-in hero-brand">Prithvi Drishti</h1>
+                <p class="hero-sub hero-in">See the Earth change</p>
+                <div class="hero-foot hero-in">
+                    <p class="lede">Satellite change detection, flood forecasting and response planning on one map — every number shown with its source, its range and its limits.</p>
+                    <a class="btn btn-light" href="/dashboard.html"><span>Open the dashboard</span><span class="btn-arrow" aria-hidden="true">→</span></a>
+                </div>
+            </div>
+        </section>
+
+        <!-- 2 · What it analyses -->
+        <section id="analyses" class="scene scene-wide" data-scene="analyses">
+            <div class="bracket reveal"><h2>Five analyses,<br>one area at a time</h2></div>
+            <p class="reveal centered narrow">Draw an area or name a place, pick an analysis, and watch each step report in. A step that cannot get its data says so — nothing is filled in.</p>
+            <ul class="analysis-grid">
+                <li class="analysis-card reveal">
+                    <span class="analysis-no">01</span>
+                    <h3>Flood forecast</h3>
+                    <p class="analysis-src">Rainfall ensemble · GloFAS</p>
+                    <p>Rainfall-driven forecast for the next days, with the share of ensemble members that exceed flood depth.</p>
+                </li>
+                <li class="analysis-card reveal">
+                    <span class="analysis-no">02</span>
+                    <h3>Flood detection</h3>
+                    <p class="analysis-src">Sentinel-1 radar</p>
+                    <p>Compares two radar passes on the same orbit. Sees through cloud; cannot see flooding in built-up areas.</p>
+                </li>
+                <li class="analysis-card reveal">
+                    <span class="analysis-no">03</span>
+                    <h3>Surface-water change</h3>
+                    <p class="analysis-src">Sentinel-2 optical</p>
+                    <p>New or lost open water between two clear images, with the people and facilities inside the new extent.</p>
+                </li>
+                <li class="analysis-card reveal">
+                    <span class="analysis-no">04</span>
+                    <h3>Vegetation change</h3>
+                    <p class="analysis-src">Sentinel-2 optical</p>
+                    <p>Potential vegetation loss between two dates, after removing the seasonal shift between the images.</p>
+                </li>
+                <li class="analysis-card analysis-card-accent reveal">
+                    <span class="analysis-no">05</span>
+                    <h3>Forest loss</h3>
+                    <p class="analysis-src">Sentinel-2 · Hansen · FIRMS · OSM</p>
+                    <p>Loss on mapped tree cover, checked against the Hansen record, fire detections and protected areas.</p>
+                </li>
+            </ul>
+        </section>
+
+        <!-- 3 · A real result + the dashboard -->
+        <section id="showcase" class="scene scene-wide" data-scene="showcase">
+            <div class="showcase">
+                <figure class="compare reveal" id="compare" style="--split: 50%">
+                    <img src="/landing/koshi-after.jpg" alt="Sentinel-2 image of the Koshi Barrage area, Nepal, on 28 September 2026 — new surface water across the floodplain" width="900" height="805" loading="lazy">
+                    <img class="compare-before" src="/landing/koshi-before.jpg" alt="Sentinel-2 image of the same area on 17 March 2026, before the monsoon" width="900" height="805" loading="lazy">
+                    <span class="compare-tag compare-tag-before">17 Mar 2026</span>
+                    <span class="compare-tag compare-tag-after">28 Sep 2026</span>
+                    <span class="compare-handle" aria-hidden="true"></span>
+                    <input class="compare-range" type="range" min="0" max="100" value="50" aria-label="Slide between the before and after images">
+                </figure>
+                <div class="showcase-copy">
+                    <p class="tag reveal">Koshi Barrage, Nepal — a real result</p>
+                    <h2 class="reveal">Surface-water change between two dates.</h2>
+                    <p class="reveal">Two Sentinel-2 images, one analysis run on this platform. Drag the handle to compare them.</p>
+                    <dl class="result-facts reveal">
+                        <div><dt>New surface water</dt><dd>41.6 km²<small>range 38.2–43.9</small></dd></div>
+                        <div><dt>People inside the extent</dt><dd>313<small>range 313–418</small></dd></div>
+                        <div><dt>Detection confidence</dt><dd>High<small>a class, not a probability</small></dd></div>
+                    </dl>
+                    <p class="result-note reveal">New water is not necessarily flooding — a filling reservoir or a seasonal channel looks the same. Vulnerability is unknown, so the risk rating is marked incomplete. Contains modified Copernicus Sentinel data 2026.</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- 4 · Data sources + agents -->
+        <section id="agents" class="scene scene-wide" data-scene="agents">
+            <div class="sources-head reveal">
+                <h3>Data sources</h3>
+                <p>Open data, read live. No account or key is needed to run the platform.</p>
+            </div>
+            <ul class="sources reveal">
+                <li><div class="source"><strong>Copernicus</strong><span>Sentinel-1 radar · Sentinel-2 optical</span></div></li>
+                <li><div class="source"><strong>Open-Meteo</strong><span>GloFAS discharge · rainfall</span></div></li>
+                <li><div class="source"><strong>OpenStreetMap</strong><span>Hospitals, schools, shelters</span></div></li>
+                <li><div class="source"><strong>GDACS</strong><span>Reported flood events</span></div></li>
+                <li><div class="source"><strong>NASA GIBS</strong><span>Daily true-colour imagery</span></div></li>
+            </ul>
+
+            <div class="bracket reveal"><h2>Eight agents,<br>one event bus</h2></div>
+            <p class="reveal centered narrow">Each agent owns one job and publishes what it finds; the others react. Safety decisions — alert severity, phase thresholds — are always computed deterministically. The language model explains, it never decides.</p>
+
+            <div id="agent-ring" class="agent-grid reveal" tabindex="0" role="group" aria-label="The eight agents. Drag, or use the arrow keys, to turn the ring.">
+                <article class="agent-card" data-agent="sentinel_agent">
+                    <header><span class="agent-dot"></span><h3>Sentinel</h3><span class="agent-tag">every 15 min</span></header>
+                    <p>Watches river discharge and scores it against the seasonal baseline to catch anomalies early.</p>
+                </article>
+                <article class="agent-card" data-agent="glof_agent">
+                    <header><span class="agent-dot"></span><h3>GLOF</h3><span class="agent-tag">direct bypass</span></header>
+                    <p>Monitors glacial lakes for dam failure and can alert directly, skipping the queue.</p>
+                </article>
+                <article class="agent-card" data-agent="flood_predict_agent">
+                    <header><span class="agent-dot"></span><h3>Flood Predict</h3><span class="agent-tag">ensemble</span></header>
+                    <p>Routes a rainfall ensemble through the basin and reports probability with uncertainty bounds.</p>
+                </article>
+                <article class="agent-card" data-agent="urban_risk_agent">
+                    <header><span class="agent-dot"></span><h3>Urban Risk</h3><span class="agent-tag">per zone</span></header>
+                    <p>Maps the forecast onto streets and districts: who is exposed, and how badly.</p>
+                </article>
+                <article class="agent-card" data-agent="alert_agent">
+                    <header><span class="agent-dot"></span><h3>Alert</h3><span class="agent-tag">deterministic</span></header>
+                    <p>Turns severity into warnings and exports them as standard CAP 1.2 messages.</p>
+                </article>
+                <article class="agent-card" data-agent="resource_agent">
+                    <header><span class="agent-dot"></span><h3>Resource</h3><span class="agent-tag">logistics</span></header>
+                    <p>Pre-positions boats, shelters and supplies before the peak, and justifies each order.</p>
+                </article>
+                <article class="agent-card" data-agent="disease_risk_agent">
+                    <header><span class="agent-dot"></span><h3>Disease Risk</h3><span class="agent-tag">post-flood</span></header>
+                    <p>Estimates outbreak risk in the days after the water recedes.</p>
+                </article>
+                <article class="agent-card" data-agent="compound_event_agent">
+                    <header><span class="agent-dot"></span><h3>Compound Event</h3><span class="agent-tag">fusion</span></header>
+                    <p>Spots hazards that coincide — flood plus landslide plus outbreak — and scores the combined threat.</p>
+                </article>
+            </div>
+            <div class="ring-controls reveal">
+                <button id="ring-prev" class="ring-btn" type="button" aria-label="Previous agent">←</button>
+                <span id="ring-label" class="ring-label" aria-live="polite"></span>
+                <button id="ring-next" class="ring-btn" type="button" aria-label="Next agent">→</button>
+            </div>
+        </section>
+
+        <!-- 5 · Pipeline -->
+        <section id="pipeline" class="scene scene-wide" data-scene="pipeline">
+            <div class="bracket reveal"><h2>Seven phases,<br>quiet watch to recovery</h2></div>
+            <p class="reveal centered narrow">An orchestrator advances the phase one step at a time as agents report in. Each transition is gated on evidence, logged, and pushed live to every connected screen.</p>
+            <ol id="phase-track" class="phase-track">
+                <li class="phase-step reveal" data-phase="0"><span class="phase-num">00</span><h3>Monitoring</h3><p>Always on</p></li>
+                <li class="phase-step reveal" data-phase="1"><span class="phase-num">01</span><h3>Elevated</h3><p>Anomaly detected</p></li>
+                <li class="phase-step reveal" data-phase="2"><span class="phase-num">02</span><h3>Imminent</h3><p>Probability above 70%</p></li>
+                <li class="phase-step reveal" data-phase="3"><span class="phase-num">03</span><h3>Evacuation</h3><p>Above 90% or a breach</p></li>
+                <li class="phase-step reveal" data-phase="4"><span class="phase-num">04</span><h3>Active</h3><p>Flood confirmed</p></li>
+                <li class="phase-step reveal" data-phase="5"><span class="phase-num">05</span><h3>Post-flood</h3><p>Water receding</p></li>
+                <li class="phase-step reveal" data-phase="6"><span class="phase-num">06</span><h3>Recovery</h3><p>Rebuild and learn</p></li>
+            </ol>
+        </section>
+
+        <!-- 6 · Live status + CTA -->
+        <section id="live" class="scene scene-live" data-scene="live">
+            <div class="space-card" data-space aria-hidden="true"></div>
+            <div class="space-ring" aria-hidden="true"></div>
+            <div class="live-copy">
+                <p class="tag tag-light reveal">Live status</p>
+                <h2 class="reveal">Check the system yourself.</h2>
+                <div id="status-grid" class="status-grid reveal" aria-live="polite">
+                    <div class="status-tile"><span class="status-label">System</span><span id="st-system" class="status-value">Checking…</span></div>
+                    <div class="status-tile"><span class="status-label">Phase</span><span id="st-phase" class="status-value">—</span></div>
+                    <div class="status-tile"><span class="status-label">Agents online</span><span id="st-agents" class="status-value">—</span></div>
+                    <div class="status-tile"><span class="status-label">Reasoning</span><span id="st-llm" class="status-value">—</span></div>
+                    <div class="status-tile"><span class="status-label">Events processed</span><span id="st-events" class="status-value">—</span></div>
+                </div>
+                <p id="status-note" class="status-note reveal"></p>
+                <div class="cta-row reveal">
+                    <a class="btn btn-light" href="/dashboard.html"><span>Open the dashboard</span><span class="btn-arrow" aria-hidden="true">→</span></a>
+                    <button id="simulate-btn" class="btn btn-outline" type="button">Run a demo flood event</button>
+                </div>
+                <p class="tagline reveal">Measured where we can. Labelled where we can’t.</p>
+            </div>
+        </section>
+    </main>
+
+    <footer class="site-footer">
+        <div class="footer-banner">
+            <p>Every event on the map opens its evidence: the images, the method, the range and what is still unknown.</p>
+            <a class="btn btn-light" href="/dashboard.html"><span>Open the dashboard</span><span class="btn-arrow" aria-hidden="true">→</span></a>
+        </div>
+        <div class="footer-main">
+            <a class="footer-brand" href="#hero">
+                <img src="/favicon.svg" alt="" width="40" height="40">
+                <span>Prithvi Drishti</span>
+                <small>Earth vision. Satellite change detection, flood forecasting and response planning, with the evidence shown.</small>
+            </a>
+            <nav class="footer-cols" aria-label="Footer">
+                <div>
+                    <p>Platform</p>
+                    <a href="/dashboard.html">Dashboard</a>
+                    <a href="#analyses">Analyses</a>
+                    <a href="#showcase">Results</a>
+                    <a href="#agents">Agents</a>
+                    <a href="#pipeline">Pipeline</a>
+                    <a href="#live">Live status</a>
+                </div>
+            </nav>
+            <p class="footer-note">Prithvi Drishti — environmental intelligence. Detection models are unevaluated baselines; see each event’s report for limits.</p>
+        </div>
+    </footer>
+
+    <script>
+      window.PRITHVIDRISHTI_CONFIG = { apiUrl: '/api/v1' };
+    </script>
+    <script type="module" src="/src/landing/landing.js"></script>
+</body>
+</html>

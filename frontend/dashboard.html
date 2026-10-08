@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Prithvi Drishti operations dashboard — environmental events, risk, evidence and analysis on one map.">
+    <title>Prithvi Drishti — Environmental intelligence</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/src/app/app.css">
+</head>
+<body class="panel-open">
+    <a class="skip-link" href="#map">Skip to map</a>
+
+    <header class="topbar">
+        <a class="brand" href="/" title="Back to the landing page">
+            <img src="/favicon.svg" alt="" width="22" height="22">
+            <span class="brand-name">Prithvi Drishti</span>
+            <span class="brand-sub">Environmental intelligence</span>
+        </a>
+        <form class="search" role="search" autocomplete="off">
+            <label class="sr-only" for="search-input">Search places, coordinates or events</label>
+            <input id="search-input" type="search" placeholder="Search a place, coordinates or event…"
+                role="combobox" aria-controls="search-results" aria-expanded="false" aria-autocomplete="list">
+            <ul id="search-results" class="search-results" role="listbox" hidden></ul>
+        </form>
+        <time id="clock" class="clock" aria-label="Current time, UTC"></time>
+        <button type="button" id="status-pill" class="status-pill status-checking">
+            <span class="status-dot" aria-hidden="true"></span><span>Checking…</span>
+        </button>
+    </header>
+
+    <div class="shell">
+        <nav class="rail" aria-label="Sections">
+            <button type="button" data-panel="events" aria-pressed="true"><span class="rail-icon" aria-hidden="true">◎</span>Events</button>
+            <button type="button" data-panel="monitor" aria-pressed="false"><span class="rail-icon" aria-hidden="true">◐</span>Monitor</button>
+            <button type="button" data-panel="layers" aria-pressed="false"><span class="rail-icon" aria-hidden="true">▤</span>Layers</button>
+            <button type="button" data-panel="analyse" aria-pressed="false"><span class="rail-icon" aria-hidden="true">⬚</span>Analyse</button>
+            <button type="button" data-panel="assistant" aria-pressed="false"><span class="rail-icon" aria-hidden="true">✦</span>Assistant</button>
+            <button type="button" data-panel="system" aria-pressed="false"><span class="rail-icon" aria-hidden="true">⚙</span>System</button>
+        </nav>
+
+        <aside id="panel" class="panel" aria-labelledby="panel-title">
+            <header class="panel-head">
+                <h2 id="panel-title">Events</h2>
+                <button type="button" class="icon-btn" id="panel-close" aria-label="Close panel">✕</button>
+            </header>
+            <section class="panel-body" data-panel-body="events"></section>
+            <section class="panel-body" data-panel-body="monitor" hidden></section>
+            <section class="panel-body" data-panel-body="layers" hidden></section>
+            <section class="panel-body" data-panel-body="analyse" hidden></section>
+            <section class="panel-body panel-assistant" data-panel-body="assistant" hidden></section>
+            <section class="panel-body" data-panel-body="system" hidden></section>
+        </aside>
+
+        <main class="stage">
+            <div id="map" class="map" tabindex="-1" role="application" aria-label="Map of events. Use the Events panel for a keyboard-accessible list."></div>
+            <div id="map-error" class="map-error" hidden></div>
+            <div id="draw-hint" class="draw-hint" role="status" hidden>Drag on the map to draw the analysis area · Esc to cancel</div>
+            <div id="compare" class="compare" hidden></div>
+
+            <aside id="detail" class="detail" aria-labelledby="detail-title" hidden>
+                <button type="button" class="icon-btn detail-close" data-action="close-detail" aria-label="Close event details">✕</button>
+                <div class="detail-body"></div>
+            </aside>
+
+            <section id="timeline" class="timeline" aria-label="Timeline"></section>
+        </main>
+    </div>
+
+    <script>
+      window.PRITHVIDRISHTI_CONFIG = {
+        apiUrl: '/api/v1',
+        wsUrl: (location.protocol === 'https:' ? 'wss' : 'ws') + '://' + location.host + '/ws/flood',
+      };
+    </script>
+    <script type="module" src="/src/app/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,336 @@
+"""
+FastAPI application — the HTTP backbone of Prithvi Drishti.
+
+Serves:
+- REST endpoints for map layers, flood state, scenarios, ensemble data
+- WebSocket for live push updates to the frontend
+- OAuth callback routes for Google Workspace
+- CORS middleware for the Vite frontend
+"""
+
+from __future__ import annotations
+
+import asyncio
+from contextlib import asynccontextmanager
+from typing import Any
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from prithvidrishti.config import FRONTEND_ORIGIN, LLM_ENSEMBLE_CONCURRENCY
+from prithvidrishti.llm.client import FloodLLMClient
+from prithvidrishti.llm.reasoning import FloodReasoner
+from prithvidrishti.models.state import FloodSystemState, create_initial_state
+from prithvidrishti.queue.event_bus import EventBus
+
+# ── Global state (shared across routes) ──────────────────────────
+# In production, this would be Redis-backed. For now, in-memory.
+_app_state: dict[str, Any] = {}
+
+
+def get_state() -> FloodSystemState:
+    return _app_state.get("flood_state", create_initial_state())
+
+
+def get_event_bus() -> EventBus:
+    return _app_state.get("event_bus", EventBus())
+
+
+def get_reasoner() -> FloodReasoner:
+    return _app_state.get("reasoner", FloodReasoner())
+
+
+def get_latest_forecast() -> dict[str, Any] | None:
+    """Most recent FloodForecast dict from live state, or None (cold start)."""
+    forecasts = get_state().get("flood_forecasts", [])
+    if not forecasts:
+        return None
+    latest = forecasts[-1]
+    return latest if isinstance(latest, dict) else latest.model_dump()
+
+
+def get_latest_urban() -> dict[str, Any] | None:
+    """Most recent UrbanRiskReport dict from live state, or None (cold start)."""
+    reports = get_state().get("urban_risk_reports", [])
+    if not reports:
+        return None
+    latest = reports[-1]
+    return latest if isinstance(latest, dict) else latest.model_dump()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application startup/shutdown lifecycle."""
+    # ── Startup ──────────────────────────────────────────────────
+    event_bus = EventBus()
+    flood_state = create_initial_state()
+
+    # ── v4 multi-model fleet ─────────────────────────────────────
+    # Heterogeneous ensemble pool: the primary provider plus the extras named
+    # in LLM_ENSEMBLE_PROVIDERS (e.g. "groq,github") — distinct models vote in
+    # _ensemble_vote. Every provider is wrapped in the 429-cooldown guard by
+    # make_provider; an unavailable extra is simply skipped by the pool.
+    from prithvidrishti.config import LLM_ENSEMBLE_PROVIDERS
+    from prithvidrishti.llm.providers import make_provider
+
+    primary = make_provider()
+    extras = []
+    seen = {primary.name}
+    for name in (n.strip() for n in LLM_ENSEMBLE_PROVIDERS.split(",") if n.strip()):
+        p = make_provider(name)
+        if p.name not in seen and p.available():
+            extras.append(p)
+            seen.add(p.name)
+    # NVIDIA NIM fallback models (GLM 5.1, MiniMax) auto-join the fallthrough
+    # chain whenever their key is set — so a primary 429 / token-limit falls
+    # through to them without any LLM_ENSEMBLE_PROVIDERS config. Deduped by name.
+    for name in ("nvidia", "nvidia-minimax"):
+        p = make_provider(name)
+        if p.name not in seen and p.available():
+            extras.append(p)
+            seen.add(p.name)
+    llm_client = FloodLLMClient(provider=primary, extra_providers=extras)
+    reasoner = FloodReasoner(llm_client)
+
+    # Per-agent routing (free-tier friendly, no agent-code changes):
+    #  * fast lane — Groq llama for the high-frequency SentinelAgent;
+    #  * deep lane — GitHub Models gpt-4.1-mini for the two low-frequency deep
+    #    reasoners (compound, urban), falling back to the primary when the
+    #    GitHub free tier is cooling down or unkeyed.
+    fast = make_provider("groq")
+    fast_client = (FloodLLMClient(provider=fast, extra_providers=extras)
+                   if fast.available() else llm_client)
+    deep = make_provider("github")
+    deep_client = (FloodLLMClient(provider=deep, extra_providers=[primary, *extras])
+                   if deep.available() else llm_client)
+
+    _app_state["event_bus"] = event_bus
+    _app_state["flood_state"] = flood_state
+    _app_state["llm_client"] = llm_client
+    _app_state["reasoner"] = reasoner
+    _app_state["ws_clients"] = set()
+
+    # Shared LLM concurrency cap — created here (inside the running loop, after
+    # config load), then installed on BaseAgent so every agent's ensemble/
+    # reflexion calls are bounded. Default 1 = sequential (tier-1 RPM safe).
+    from prithvidrishti.agents.base import set_agent_memory, set_llm_semaphore
+    llm_semaphore = asyncio.Semaphore(LLM_ENSEMBLE_CONCURRENCY)
+    _app_state["_llm_semaphore"] = llm_semaphore
+    set_llm_semaphore(llm_semaphore)
+
+    # Shared agent memory (historical-event recall). Semantic recall activates
+    # only when sentence-transformers is installed (keyless); otherwise disabled.
+    from prithvidrishti.llm.memory import AgentMemory
+    agent_memory = AgentMemory()
+    _app_state["agent_memory"] = agent_memory
+    set_agent_memory(agent_memory)
+
+    from prithvidrishti.agents.alert import AlertAgent
+    from prithvidrishti.agents.compound import CompoundEventAgent
+    from prithvidrishti.agents.disease import DiseaseRiskAgent
+    from prithvidrishti.agents.glof import GLOFAgent
+    from prithvidrishti.agents.predict import FloodPredictAgent
+    from prithvidrishti.agents.resource import ResourceAgent
+    from prithvidrishti.agents.sentinel import SentinelAgent
+    from prithvidrishti.agents.urban import UrbanRiskAgent
+    from prithvidrishti.orchestrator.service import OrchestratorService
+
+    # Initialize Graph Orchestrator
+    orchestrator = OrchestratorService(event_bus, _app_state)
+    await orchestrator.initialize()
+    _app_state["orchestrator"] = orchestrator
+
+    # Keyless real-data connectors (Open-Meteo rainfall/discharge, OSM Overpass).
+    # Injected into the agents that consume them; everything degrades to mock
+    # generation when a source is unreachable.
+    from prithvidrishti.connectors.gdacs import GDACSConnector
+    from prithvidrishti.connectors.googleflood import GoogleFloodConnector
+    from prithvidrishti.connectors.openmeteo import OpenMeteoConnector
+    from prithvidrishti.connectors.osm import OSMConnector
+    from prithvidrishti.connectors.reliefweb import ReliefWebConnector
+    openmeteo = OpenMeteoConnector()
+    osm = OSMConnector()
+    gdacs = GDACSConnector()
+    reliefweb = ReliefWebConnector()
+    # v5: the operational Nature-2024 model API — activates when
+    # GOOGLE_FLOOD_API_KEY is set; reports honestly as unavailable until then.
+    googleflood = GoogleFloodConnector()
+    _app_state["connectors"] = {"openmeteo": openmeteo, "osm": osm,
+                                "gdacs": gdacs, "reliefweb": reliefweb,
+                                "googleflood": googleflood}
+
+    agents = [
+        SentinelAgent(event_bus=event_bus, llm=fast_client, connector=openmeteo,
+                      gdacs=gdacs, googleflood=googleflood),
+        GLOFAgent(event_bus=event_bus, llm=llm_client),
+        FloodPredictAgent(event_bus=event_bus, llm=llm_client, connector=openmeteo),
+        UrbanRiskAgent(event_bus=event_bus, llm=deep_client, connector=osm),
+        AlertAgent(event_bus=event_bus, llm=llm_client),
+        ResourceAgent(event_bus=event_bus, llm=llm_client),
+        DiseaseRiskAgent(event_bus=event_bus, llm=llm_client, connector=reliefweb),
+        CompoundEventAgent(event_bus=event_bus, llm=deep_client),
+    ]
+    for agent in agents:
+        await agent.initialize()
+    _app_state["agents"] = agents
+
+    # v4: SQLite persistence (single-node/eval — see obs/store.py docstring).
+    # Forecasts and alert dispatches survive restarts; empty PRITHVIDRISHTI_DB_PATH
+    # disables it cleanly.
+    from prithvidrishti.obs.store import Store
+    store = Store()
+    await store.init()
+    if store.enabled:
+        await event_bus.subscribe("flood_forecasts", store.save_forecast)
+        await event_bus.subscribe("alert_dispatches", store.save_alert)
+    _app_state["store"] = store
+
+    # v4: forecast verification loop — records every forecast and scores
+    # matured ones against GloFAS reanalysis on a crash-proof asyncio task.
+    from prithvidrishti.obs.verification import ForecastVerifier
+    verifier = ForecastVerifier(connector=openmeteo,
+                                store=store if store.enabled else None)
+    await event_bus.subscribe("flood_forecasts", verifier.record)
+    verifier.start()
+    _app_state["verifier"] = verifier
+
+    # Bridge every event-bus emit to all connected WebSocket clients so the
+    # frontend receives live agent output. The bus calls the hook as
+    # hook(channel, payload); we wrap it as {type: channel, data: payload}.
+    from prithvidrishti.api.websocket import broadcast as ws_broadcast
+
+    async def _ws_bridge(channel: str, payload: Any) -> None:
+        await ws_broadcast({"type": channel, "data": payload})
+
+    event_bus.set_ws_broadcast(_ws_bridge)
+
+    fleet = [primary.name] + [p.name for p in extras]
+    if fast_client is not llm_client:
+        fleet.append("groq(fast-lane)")
+    if deep_client is not llm_client:
+        fleet.append("github(deep-lane)")
+    print(f"Prithvi Drishti v4 - All {len(agents)} agents initialized "
+          f"(LLM fleet: {', '.join(dict.fromkeys(fleet)) if llm_client.available() else 'mock/no-key'})")
+    print("LangGraph Orchestrator hooked to Event Bus")
+    print("API: http://0.0.0.0:8000")
+    print(f"Frontend: {FRONTEND_ORIGIN}")
+
+    yield
+
+    # ── Shutdown ─────────────────────────────────────────────────
+    if _app_state.get("verifier") is not None:
+        await _app_state["verifier"].stop()
+    if _app_state.get("store") is not None:
+        await _app_state["store"].close()
+    for agent in _app_state.get("agents", []):
+        if hasattr(agent, "close"):
+            await agent.close()
+    print("🛑 Prithvi Drishti shutdown complete")
+
+
+def create_app() -> FastAPI:
+    """Create and configure the FastAPI application."""
+    from prithvidrishti.obs import setup_logging
+    setup_logging()
+
+    app = FastAPI(
+        title="Prithvi Drishti v4",
+        description="Multi-agent flood orchestration system — UI-first architecture",
+        version="0.4.0",
+        lifespan=lifespan,
+    )
+
+    # v4: minimal API-key auth. When PRITHVIDRISHTI_API_KEY is set, /api/v1/* needs
+    # the X-API-Key header (the WS upgrade uses ?api_key=… — browsers cannot
+    # set custom WS headers). Unset = open dev mode. Full AuthN/Z and rate
+    # limiting are documented out-of-scope for v4.
+    from prithvidrishti.config import PRITHVIDRISHTI_API_KEY
+    if PRITHVIDRISHTI_API_KEY:
+        from fastapi import Request
+        from fastapi.responses import JSONResponse
+
+        @app.middleware("http")
+        async def _api_key_guard(request: Request, call_next):
+            if request.url.path.startswith("/api/v1/") and \
+                    request.headers.get("X-API-Key") != PRITHVIDRISHTI_API_KEY:
+                return JSONResponse(status_code=401,
+                                    content={"detail": "invalid or missing API key"})
+            return await call_next(request)
+
+    # CORS for Vite frontend
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[FRONTEND_ORIGIN, "http://localhost:5173", "http://localhost:3000"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    # Register route modules
+    from prithvidrishti.api.routes_auth import router as auth_router
+    from prithvidrishti.api.routes_events import router as events_router
+    from prithvidrishti.api.routes_flood import router as flood_router
+    from prithvidrishti.api.routes_system import router as system_router
+    from prithvidrishti.api.routes_v4 import router as v4_router
+    from prithvidrishti.api.websocket import router as ws_router
+
+    app.include_router(v4_router, prefix="/api/v1", tags=["v4 Ops"])
+    app.include_router(system_router, prefix="/api/v1", tags=["System"])
+    app.include_router(events_router, prefix="/api/v1", tags=["Events"])
+    app.include_router(flood_router, prefix="/api/v1/flood", tags=["Flood State"])
+    app.include_router(auth_router, prefix="/auth", tags=["Auth"])
+    app.include_router(ws_router, tags=["WebSocket"])
+
+    @app.get("/")
+    async def root():
+        return {"service": "Prithvi Drishti v3", "status": "running", "phase": get_state().get("current_phase", "MONITORING")}
+
+    @app.get("/health")
+    async def health():
+        """Aggregate readiness: agents, LLM, and each connector (live/mock)."""
+        llm = _app_state.get("llm_client")
+        agents = _app_state.get("agents", [])
+        connectors = _app_state.get("connectors", {})
+
+        conn_status: dict[str, Any] = {}
+        for name, conn in connectors.items():
+            try:
+                ok = await asyncio.wait_for(conn.health_check(), timeout=3.0)
+            except Exception:
+                ok = False
+            conn_status[name] = {
+                "is_mock": getattr(conn, "is_mock", True),
+                "reachable": bool(ok),
+                "status": "mock" if getattr(conn, "is_mock", True)
+                          else ("live" if ok else "error"),
+            }
+
+        return {
+            "status": "ok",
+            "agents": [getattr(a, "agent_id", "?") for a in agents],
+            "llm_available": bool(llm and llm.available()),
+            "llm_fleet": ([getattr(p, "name", "?")
+                           for p in llm.provider_pool()]
+                          if llm and hasattr(llm, "provider_pool") else []),
+            "connectors": conn_status,
+        }
+
+    @app.get("/metrics")
+    async def metrics():
+        """Prometheus exposition (dev-only, in-memory counters — reset on restart)."""
+        from fastapi import Response
+        from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, Gauge, generate_latest
+
+        bus = _app_state.get("event_bus")
+        reg = CollectorRegistry()
+        emits = Gauge("prithvidrishti_channel_emits", "Events emitted per channel",
+                      ["channel"], registry=reg)
+        errors = Gauge("prithvidrishti_handler_errors_total", "Handler errors", registry=reg)
+        if bus is not None:
+            m = bus.get_metrics()
+            for channel, count in m.get("emit_counts", {}).items():
+                emits.labels(channel=channel).set(count)
+            errors.set(m.get("handler_errors", 0))
+        return Response(generate_latest(reg), media_type=CONTENT_TYPE_LATEST)
+
+    return app
