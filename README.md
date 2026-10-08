@@ -1,4 +1,4 @@
-# prithvidrishti — Flood Multi-Agent Orchestration System
+# prithvidrishti — Multi-Agent Orchestration System
 
 > Production-grade multi-agent flood monitoring, prediction, and response
 > platform — **8 agents** across **7 cascading phases**, **10 external data
